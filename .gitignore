@@ -2,9 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
+*.o
 
 # Distribution / packaging
 .Python
@@ -20,85 +19,48 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
+# Virtual Environments
 .env
 .venv
 env/
 venv/
 ENV/
-env.bak/
-venv.bak/
+VENV/
+my_brain_env/ # Ensure this is here!
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# Data files - EXCLUDE THESE
+data/
+data_processed/
 
-# Rope project settings
-.ropeproject
+# Log files
+*.log
+logs/
 
-# mkdocs documentation
-/site
+# Temporary files
+*.tmp
+*~
+.DS_Store
+Thumbs.db
 
-# mypy
-.mypy_cache/
+# IDE / Editor specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Specific image outputs we might not want to track if they are numerous or intermediate
+# If you want to keep specific ones, don't list them here or use negation.
+Figure_1.png
+Figure_2.png
+# Figure_3.png # If this is your latest evaluation, you might want to keep it, or rely on evaluation_plot.png
+# evaluation figure.png # Older name, we'll use evaluation_plot.png
+
+# If your trained_models folder gets very large, you might consider:
+# trained_models/*.keras 
+# But for now, let's track the best model if it's not huge.
