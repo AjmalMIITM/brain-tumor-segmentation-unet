@@ -3,6 +3,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
+from tensorflow.keras.optimizers import Adam
 # import matplotlib.pyplot as plt # Uncomment if you want to plot history at the end
 
 # --- Dice Coefficient Metric Function ---
@@ -13,6 +14,10 @@ def dice_coef(y_true, y_pred, smooth=1e-6):
     y_pred_f = tf.keras.backend.flatten(y_pred)
     intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
     return (2. * intersection + smooth) / (tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
+
+# --- Dice Loss Function ---
+def dice_loss(y_true, y_pred, smooth=1e-6):
+    return 1 - dice_coef(y_true, y_pred, smooth)
 
 # --- Define the U-Net Model Architecture ---
 def unet_model(input_size=(256, 256, 1)):
@@ -83,10 +88,10 @@ if __name__ == '__main__':
 
     print("Loading preprocessed data...")
     try:
-        X_train = np.load(os.path.join(processed_data_path, 'train_images.npy'))
-        y_train = np.load(os.path.join(processed_data_path, 'train_masks.npy'))
-        X_val = np.load(os.path.join(processed_data_path, 'val_images.npy'))
-        y_val = np.load(os.path.join(processed_data_path, 'val_masks.npy'))
+        X_train = np.load(os.path.join(processed_data_path, 'X_train.npy'))
+        y_train = np.load(os.path.join(processed_data_path, 'y_train.npy'))
+        X_val = np.load(os.path.join(processed_data_path, 'X_val.npy'))
+        y_val = np.load(os.path.join(processed_data_path, 'y_val.npy'))
     except FileNotFoundError:
         print("ERROR: Preprocessed data files not found. Please run preprocess_data.py first.")
         exit()
@@ -100,42 +105,40 @@ if __name__ == '__main__':
     input_shape = (IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS)
     print(f"Input shape for U-Net: {input_shape}")
 
-    # --- MODIFIED: Load existing model or create new ---
     checkpoint_filepath_to_load = os.path.join(model_save_path, 'unet_brain_tumor_best.keras')
-    initial_epoch = 0 # This will be used if we load a model and want to adjust epoch display
+    initial_epoch = 0
 
     if os.path.exists(checkpoint_filepath_to_load):
         print(f"\n--- Found existing best model at: {checkpoint_filepath_to_load} ---")
-        print("--- Loading this model to resume training. ---")
+        print("--- Loading this model. It will be RE-COMPILED with Dice Loss for further training. ---")
         try:
-            # When loading a model with custom objects, they must be passed to load_model
-            model = keras.models.load_model(checkpoint_filepath_to_load, custom_objects={'dice_coef': dice_coef})
-            print("--- Model loaded successfully. ---")
-            # Optional: If you saved epoch number, load it here to set initial_epoch
-            # For simplicity, we are not doing that, so training will always run for 'EPOCHS' more epochs
-            # or until early stopping.
+            model = keras.models.load_model(checkpoint_filepath_to_load, custom_objects={'dice_coef': dice_coef, 'dice_loss': dice_loss})
+            print("--- Model loaded successfully. Re-compiling with Dice Loss... ---")
+            optimizer = Adam(learning_rate=1e-4, clipnorm=1.0)
+            model.compile(optimizer=optimizer, loss=dice_loss, metrics=['accuracy', dice_coef])
+            print("--- Model re-compiled with Dice Loss. ---")
         except Exception as e:
-            print(f"Error loading model: {e}")
-            print("Starting training from scratch with a new model.")
+            print(f"Error loading or re-compiling model: {e}")
+            print("Starting training from scratch with a new model using Dice Loss.")
             model = unet_model(input_size=input_shape)
-            model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy', dice_coef])
+            optimizer = Adam(learning_rate=1e-4, clipnorm=1.0)
+            model.compile(optimizer=optimizer, loss=dice_loss, metrics=['accuracy', dice_coef])
     else:
         print(f"\n--- No existing best model found at: {checkpoint_filepath_to_load} ---")
-        print("--- Creating a new model and starting training from scratch. ---")
+        print("--- Creating a new model and starting training from scratch with Dice Loss. ---")
         model = unet_model(input_size=input_shape)
-        model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy', dice_coef])
+        optimizer = Adam(learning_rate=1e-4, clipnorm=1.0)
+        model.compile(optimizer=optimizer, loss=dice_loss, metrics=['accuracy', dice_coef])
     
     model.summary()
 
     print("\nStarting model training...")
     EPOCHS = 25 
-    BATCH_SIZE = 16 # Adjust if you run into memory issues
+    BATCH_SIZE = 16
 
-    # Checkpoint filepath for saving during this run
-    checkpoint_filepath_during_run = os.path.join(model_save_path, 'unet_brain_tumor_best.keras')
-
+    checkpoint_filepath = os.path.join(model_save_path, 'unet_brain_tumor_best.keras')
     model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-        filepath=checkpoint_filepath_during_run, # Save to the same file to overwrite with better model
+        filepath=checkpoint_filepath,
         save_weights_only=False,
         monitor='val_dice_coef', 
         mode='max',             
@@ -143,7 +146,7 @@ if __name__ == '__main__':
 
     early_stopping_callback = tf.keras.callbacks.EarlyStopping(
         monitor='val_dice_coef',
-        mode='max', # ADDED this mode explicitly
+        mode='max',
         patience=7,         
         verbose=1,
         restore_best_weights=True)
@@ -151,65 +154,16 @@ if __name__ == '__main__':
     history = model.fit(
         X_train, y_train,
         batch_size=BATCH_SIZE,
-        epochs=EPOCHS, # Model will train for this many epochs, or stop early
-        initial_epoch=initial_epoch, # Starts counting epochs from here. Useful if you track total epochs across sessions.
+        epochs=EPOCHS,
+        initial_epoch=initial_epoch,
         validation_data=(X_val, y_val),
         callbacks=[model_checkpoint_callback, early_stopping_callback]
     )
 
     print("\nTraining finished.")
-    # The best model (based on val_dice_coef) should have been saved by ModelCheckpoint
-    # if restore_best_weights=True in EarlyStopping, the model object 'model' is already the best one.
-    # Let's ensure the file on disk is the one from the best epoch.
-    # ModelCheckpoint handles this.
-
-    # Check if the best model was saved by checking if the file exists (it should if training ran at least one successful epoch)
-    if os.path.exists(checkpoint_filepath_during_run):
-         print(f"Best model (based on val_dice_coef) should be at: {checkpoint_filepath_during_run}")
+    if os.path.exists(checkpoint_filepath):
+         print(f"Best model (based on val_dice_coef) should be at: {checkpoint_filepath}")
     else:
-        # This case should be rare if training starts and ModelCheckpoint is active.
-        # If early stopping happened before any improvement or if there was an issue saving.
-        print(f"Warning: Best model checkpoint file not found at {checkpoint_filepath_during_run}.")
-        print("This might happen if training stopped very early or there was a saving issue.")
-        # Optionally, save the current state of the model if no checkpoint was made:
-        # last_model_path = os.path.join(model_save_path, 'unet_brain_tumor_last_state.keras')
-        # model.save(last_model_path)
-        # print(f"Current state of model saved to: {last_model_path}")
-
-
-    # (Optional) Plot training history
-    # print("\nPlotting training history...")
-    # try:
-    #     plt.figure(figsize=(12, 10)) 
-
-    #     plt.subplot(3, 1, 1)
-    #     plt.plot(history.history['loss'], label='Train Loss')
-    #     plt.plot(history.history['val_loss'], label='Val Loss')
-    #     plt.legend()
-    #     plt.title('Loss')
-
-    #     plt.subplot(3, 1, 2)
-    #     plt.plot(history.history['accuracy'], label='Train Accuracy')
-    #     plt.plot(history.history['val_accuracy'], label='Val Accuracy')
-    #     plt.legend()
-    #     plt.title('Accuracy')
-        
-    #     plt.subplot(3, 1, 3)
-    #     if 'dice_coef' in history.history and 'val_dice_coef' in history.history:
-    #         plt.plot(history.history['dice_coef'], label='Train Dice Coef')
-    #         plt.plot(history.history['val_dice_coef'], label='Val Dice Coef')
-    #         plt.legend()
-    #         plt.title('Dice Coefficient')
-    #     else:
-    #         print("Dice coefficient not found in history to plot.")
-        
-    #     plt.tight_layout()
-    #     plot_save_path = os.path.join(model_save_path, 'training_history_plot.png')
-    #     plt.savefig(plot_save_path)
-    #     print(f"Training history plot saved to {plot_save_path}")
-    #     # plt.show() 
-    # except Exception as e:
-    #     print(f"Error plotting history: {e}")
-
+        print(f"Warning: Best model checkpoint file not found at {checkpoint_filepath}.")
 
     print("\nScript finished.")

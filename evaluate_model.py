@@ -1,19 +1,18 @@
 import os
 import numpy as np
-import tensorflow as tf # Make sure this is imported
+import tensorflow as tf
 from tensorflow import keras
 import matplotlib.pyplot as plt
-import cv2 # We might not need cv2 if just loading .npy, but good to have for other image ops
+from sklearn.metrics import confusion_matrix # For sensitivity, specificity, precision
 
 # --- Configuration ---
 processed_data_path = r'C:\AI_Projects\BrainTumorProject\brain-tumor-segmentation-unet\data_processed'
-# Path to your saved best model
-model_path = r'C:\AI_Projects\BrainTumorProject\brain-tumor-segmentation-unet\trained_models\unet_brain_tumor_best.keras'
+model_path = r'C:\AI_Projects\BrainTumorProject\brain-tumor-segmentation-unet\trained_models\unet_brain_tumor_best.keras' # Loads the latest best model
 
-NUM_SAMPLES_TO_DISPLAY = 5 # How many samples to show visually
+NUM_SAMPLES_TO_DISPLAY = 5
+THRESHOLD = 0.5 # For converting probabilities to binary mask
 
-# --- Keras Dice Coefficient Metric Function (must match the one used in training) ---
-# This is the function Keras needs to know about when loading the model
+# --- Keras Dice Coefficient Metric Function (for loading the model) ---
 def dice_coef(y_true, y_pred, smooth=1e-6):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred, tf.float32)
@@ -22,25 +21,41 @@ def dice_coef(y_true, y_pred, smooth=1e-6):
     intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
     return (2. * intersection + smooth) / (tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) + smooth)
 
-# --- NumPy Dice Coefficient Function (for evaluation AFTER prediction) ---
-# This function takes NumPy arrays as input.
+# --- NumPy Metrics Functions (for evaluation AFTER prediction) ---
 def dice_coefficient_numpy(y_true_np, y_pred_np, smooth=1e-6):
-    """
-    Calculates the Dice coefficient between true and predicted binary masks (NumPy version).
-    y_true_np: True binary mask (0 or 1), as a NumPy array.
-    y_pred_np: Predicted binary mask (0 or 1, after thresholding), as a NumPy array.
-    smooth: A small constant to avoid division by zero.
-    """
     y_true_f = y_true_np.flatten()
     y_pred_f = y_pred_np.flatten()
     intersection = np.sum(y_true_f * y_pred_f)
-    return (2. * intersection + smooth) / (np.sum(y_true_f) + np.sum(y_pred_f) + smooth)
+    dice = (2. * intersection + smooth) / (np.sum(y_true_f) + np.sum(y_pred_f) + smooth)
+    return dice
+
+def jaccard_index_numpy(y_true_np, y_pred_np, smooth=1e-6):
+    y_true_f = y_true_np.flatten()
+    y_pred_f = y_pred_np.flatten()
+    intersection = np.sum(y_true_f * y_pred_f)
+    union = np.sum(y_true_f) + np.sum(y_pred_f) - intersection
+    iou = (intersection + smooth) / (union + smooth)
+    return iou
+
+def calculate_pixel_metrics(y_true_np, y_pred_np):
+    y_true_f = y_true_np.flatten()
+    y_pred_f = y_pred_np.flatten()
+    
+    if len(y_true_f) == 0 or len(y_pred_f) == 0: # Handle empty masks if necessary
+        return 0,0,0,0 # Or some other appropriate default
+
+    tn, fp, fn, tp = confusion_matrix(y_true_f, y_pred_f, labels=[0, 1]).ravel()
+    
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0 # Less critical for tumor seg
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    
+    return sensitivity, specificity, precision, tp # also return tp for context
 
 # --- Main part of the script ---
 if __name__ == '__main__':
     print("Loading the trained U-Net model...")
     try:
-        # MODIFIED: Pass custom_objects to load_model
         model = keras.models.load_model(model_path, custom_objects={'dice_coef': dice_coef})
         print("Model loaded successfully.")
     except Exception as e:
@@ -48,98 +63,116 @@ if __name__ == '__main__':
         print(f"Error details: {e}")
         exit()
 
-    print("\nLoading validation data...")
+    print("\nLoading TEST data...") # MODIFIED
     try:
-        X_val = np.load(os.path.join(processed_data_path, 'val_images.npy'))
-        y_val = np.load(os.path.join(processed_data_path, 'val_masks.npy'))
+        X_test = np.load(os.path.join(processed_data_path, 'X_test.npy')) # MODIFIED
+        y_test = np.load(os.path.join(processed_data_path, 'y_test.npy')) # MODIFIED
     except FileNotFoundError:
-        print(f"ERROR: Validation data files not found in '{processed_data_path}'.")
-        print("Please ensure preprocess_data.py was run successfully.")
+        print(f"ERROR: TEST data files not found in '{processed_data_path}'.")
+        print("Please ensure preprocess_data.py was run successfully with patient-level splits.")
         exit()
     
-    print(f"Validation data shapes: X_val: {X_val.shape}, y_val: {y_val.shape}")
+    print(f"Test data shapes: X_test: {X_test.shape}, y_test: {y_test.shape}") # MODIFIED
 
-    if len(X_val) == 0:
-        print("Validation data is empty. Cannot proceed.")
+    if len(X_test) == 0:
+        print("Test data is empty. Cannot proceed.")
         exit()
 
-    # --- Make Predictions on Validation Samples ---
-    print(f"\nMaking predictions on {NUM_SAMPLES_TO_DISPLAY} validation samples...")
-    indices_to_display = np.arange(min(NUM_SAMPLES_TO_DISPLAY, len(X_val)))
+    # --- Make Predictions on a few Test Samples for display ---
+    print(f"\nMaking predictions on {NUM_SAMPLES_TO_DISPLAY} test samples for display...")
+    indices_to_display = np.random.choice(len(X_test), NUM_SAMPLES_TO_DISPLAY, replace=False) # Random samples
     
-    sample_images = X_val[indices_to_display]
-    sample_true_masks = y_val[indices_to_display]
+    sample_images = X_test[indices_to_display]
+    sample_true_masks = y_test[indices_to_display]
     
-    predicted_masks_probs = model.predict(sample_images)
-    predicted_masks_binary = (predicted_masks_probs > 0.5).astype(np.uint8)
+    predicted_probs_display = model.predict(sample_images)
+    predicted_binary_display = (predicted_probs_display > THRESHOLD).astype(np.uint8)
 
-    # --- Display Results and Calculate Dice Scores for these samples ---
     plt.figure(figsize=(15, NUM_SAMPLES_TO_DISPLAY * 4)) 
-    
-    individual_dice_scores = []
-
     for i in range(len(indices_to_display)):
         original_image = sample_images[i, :, :, 0] 
         true_mask = sample_true_masks[i, :, :, 0]
-        pred_mask = predicted_masks_binary[i, :, :, 0]
+        pred_mask = predicted_binary_display[i, :, :, 0]
         
-        # Use the NumPy version of Dice for evaluation here
-        dice_score = dice_coefficient_numpy(true_mask, pred_mask) 
-        individual_dice_scores.append(dice_score)
+        dice_val = dice_coefficient_numpy(true_mask, pred_mask)
         
         plt.subplot(NUM_SAMPLES_TO_DISPLAY, 3, i * 3 + 1)
         plt.imshow(original_image, cmap='gray')
-        plt.title(f"Sample {indices_to_display[i]}: Original Image")
+        plt.title(f"Test Sample {indices_to_display[i]}: Original")
         plt.axis('off')
         
         plt.subplot(NUM_SAMPLES_TO_DISPLAY, 3, i * 3 + 2)
         plt.imshow(true_mask, cmap='gray')
-        plt.title(f"True Mask")
+        plt.title(f"True Mask (Tumor Pixels: {np.sum(true_mask)})")
         plt.axis('off')
         
         plt.subplot(NUM_SAMPLES_TO_DISPLAY, 3, i * 3 + 3)
         plt.imshow(pred_mask, cmap='gray')
-        plt.title(f"Predicted Mask\nDice: {dice_score:.4f}")
+        plt.title(f"Predicted Mask (Dice: {dice_val:.4f})")
         plt.axis('off')
 
     plt.tight_layout()
-    # Save the figure before showing it
-    figure_save_path = os.path.join(os.path.dirname(model_path), 'evaluation_plot.png') # Save in trained_models folder
+    figure_save_path = os.path.join(os.path.dirname(model_path), 'test_set_evaluation_plot.png')
     try:
         plt.savefig(figure_save_path)
-        print(f"\nEvaluation plot saved to: {figure_save_path}")
+        print(f"\nTest set evaluation plot saved to: {figure_save_path}")
     except Exception as e:
         print(f"Error saving evaluation plot: {e}")
     plt.show()
-
-
-    print("\nDice scores for displayed samples:")
-    for i in range(len(indices_to_display)):
-        print(f"  Sample {indices_to_display[i]} Dice: {individual_dice_scores[i]:.4f}")
     
-    # --- Calculate Average Dice Score over a larger subset or all validation data ---
-    num_samples_for_avg_dice = min(100, len(X_val))
-    print(f"\nCalculating average Dice score over the first {num_samples_for_avg_dice} validation samples...")
+    # --- Calculate Average Metrics over the ENTIRE TEST SET ---
+    print(f"\nCalculating metrics over the entire test set ({len(X_test)} samples)...")
     
-    # Ensure we use enough memory for prediction, but avoid OOM on very large X_val
-    # For 100 samples, direct prediction is usually fine.
-    # If X_val were huge, you might predict in batches.
-    if num_samples_for_avg_dice > 0:
-        all_val_pred_probs = model.predict(X_val[:num_samples_for_avg_dice])
-        all_val_pred_binary = (all_val_pred_probs > 0.5).astype(np.uint8)
+    # Predict on the entire test set (might need to do in batches if memory is an issue)
+    # For ~500-700 images of 256x256, direct prediction should be okay on CPU with 16GB RAM
+    all_test_pred_probs = model.predict(X_test, batch_size=16) # Added batch_size for predict
+    all_test_pred_binary = (all_test_pred_probs > THRESHOLD).astype(np.uint8)
+    
+    all_dice_scores = []
+    all_jaccard_scores = []
+    all_sensitivities = []
+    all_specificities = [] # Not as critical for foreground but good to see
+    all_precisions = []
+    
+    num_slices_with_tumor_in_gt = 0
+    num_slices_where_tumor_predicted = 0
+    
+    for i in range(len(X_test)):
+        true_m = y_test[i, :, :, 0]
+        pred_m = all_test_pred_binary[i, :, :, 0]
         
-        avg_dice_scores = []
-        for i in range(num_samples_for_avg_dice):
-            # Use the NumPy version of Dice for evaluation
-            score = dice_coefficient_numpy(y_val[i, :, :, 0], all_val_pred_binary[i, :, :, 0])
-            avg_dice_scores.append(score)
+        # Only calculate segmentation metrics for slices that actually contain a tumor in ground truth
+        # This is a common practice to avoid being skewed by many true negatives (empty masks)
+        if np.sum(true_m) > 0: # If there is a tumor in the ground truth
+            num_slices_with_tumor_in_gt += 1
+            dice = dice_coefficient_numpy(true_m, pred_m)
+            jaccard = jaccard_index_numpy(true_m, pred_m)
+            sensitivity, _, precision, tp = calculate_pixel_metrics(true_m, pred_m) # ignore specificity from this func
             
-        if avg_dice_scores:
-            print(f"Average Dice Coefficient over {num_samples_for_avg_dice} samples: {np.mean(avg_dice_scores):.4f}")
-        else:
-            print("Could not calculate average Dice score (no samples processed for average).")
-    else:
-        print("No samples available to calculate average Dice score.")
+            all_dice_scores.append(dice)
+            all_jaccard_scores.append(jaccard)
+            all_sensitivities.append(sensitivity)
+            all_precisions.append(precision)
 
+            if tp > 0 : # If model predicted any tumor pixels for this slice that has GT tumor
+                num_slices_where_tumor_predicted +=1
+        else: # If ground truth mask is empty
+            # If prediction is also empty, it's a perfect true negative for this slice.
+            # If prediction is not empty, it's a false positive for this slice.
+            # These cases are handled by overall pixel specificity if calculated on all pixels.
+            # For tumor-focused metrics, we often only score slices with GT tumors.
+            pass 
+
+
+    print("\n--- Test Set Metrics (calculated ONLY on slices with ground truth tumors) ---")
+    if num_slices_with_tumor_in_gt > 0:
+        print(f"  Number of test slices with ground truth tumor: {num_slices_with_tumor_in_gt} / {len(X_test)}")
+        print(f"  Number of these slices where model predicted some tumor: {num_slices_where_tumor_predicted} / {num_slices_with_tumor_in_gt}")
+        print(f"  Average Dice Coefficient: {np.mean(all_dice_scores):.4f} (Std: {np.std(all_dice_scores):.4f})")
+        print(f"  Average Jaccard Index (IoU): {np.mean(all_jaccard_scores):.4f} (Std: {np.std(all_jaccard_scores):.4f})")
+        print(f"  Average Sensitivity (Recall): {np.mean(all_sensitivities):.4f} (Std: {np.std(all_sensitivities):.4f})")
+        print(f"  Average Precision: {np.mean(all_precisions):.4f} (Std: {np.std(all_precisions):.4f})")
+    else:
+        print("No slices with ground truth tumors found in the test set to calculate metrics.")
 
     print("\nEvaluation script finished.")
