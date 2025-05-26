@@ -98,4 +98,4 @@ All new experiments, results, and documentation are by Ajmal M.
 ## Contact
 
 Ajmal M  
-[LinkedIn]([(https://www.linkedin.com/in/ajmal-m-282670284/)]) | [GitHub](https://github.com/AjmalMIITM)
+[LinkedIn](https://www.linkedin.com/in/ajmal-m-282670284/) | [GitHub](https://github.com/AjmalMIITM)
