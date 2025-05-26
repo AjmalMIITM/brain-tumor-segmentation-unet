@@ -90,7 +90,7 @@ This project implements, ablates, and evaluates U-Net-based deep learning models
 
 ## Credits
 
-This project was originally forked from [original author/repo link].  
+This project was originally forked from [original author/repo link](https://github.com/adityajn105/brain-tumor-segmentation-unet).  
 All new experiments, results, and documentation are by Ajmal M.
 
 ---
